@@ -1,0 +1,855 @@
+---
+title:  " **Assessment pre-fish passage restoration: How does habitat influence fish diet and condition?**"
+subtitle: |
+  | Report 1
+  | Fisheries Ecology and Assessment (25307).
+author:
+- Anna E. Jorgensen (s203016)
+date: "`r format(Sys.time(), '%d %B %Y')`"
+abstract: |
+
+output:
+  rmarkdown::pdf_document:
+    fig_caption: yes        
+    includes:  
+      in_header: my_header.tex
+
+header-includes:
+  - \usepackage{titling}
+  - \predate{\begin{center}\large}
+  - \postdate{\\
+      \includegraphics[width=5in,height=6in]{Graphical_Abstract.jpg}\end{center}}
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load Packages 
+
+library("ggpubr")
+library("ggplot2")    # Makes figures
+library("cowplot")    # to grid ggplots
+library("kableExtra")
+library("car")
+library("pander")     # Anova table
+library("papeR")      # conf. interval table
+library("tidyverse")
+library("fs")
+library("lubridate") # change date formate
+library("tidyr")     # Re-organize data
+library("vegan")
+library("indicspecies")
+library("plyr")
+library("broom")
+library("patchwork")
+
+```
+
+```{r Load_data, include=FALSE,echo=FALSE}
+
+Fish_Diet_Data <- read.csv(file = "data/Cedar_River_Fish_Diets.csv")
+Fish_Diet_Data
+
+#clean up data format
+
+# Changed Reach ID so it is unique to each stream. Now they can be easily merged 
+# together as the same reach even though they are not!
+
+Fish_Diet_Data <- Fish_Diet_Data%>%
+  group_by(Stream,Reach)%>%
+  dplyr::mutate(Reach_id = cur_group_id()) %>%
+  dplyr::select(Reach_id, everything())%>% 
+                          subset(select = -c(Unknown,Species,Reach))
+
+
+# Convert Units of length mm to cm 
+  Fish_Diet_Data <- 
+  Fish_Diet_Data %>% 
+  mutate(Fish.Length.cm = round(0.1 * Fish.Length..Mm,1))
+
+# Calc. Fulton's K  
+  Fish_Diet_Data$Fultons_K <- 100*(Fish_Diet_Data$Fish.Mass.G/(Fish_Diet_Data$Fish.Length.cm)^3) 
+
+# Move the column near the other environemtal variable columns.
+  Fish_Diet_Data <- Fish_Diet_Data%>%
+  dplyr::select(Fultons_K, everything())
+  
+str(Fish_Diet_Data)
+
+Fish_Diet_Data$Reach_id <- as.factor(Fish_Diet_Data$Reach_id)
+Fish_Diet_Data$Year <- as.factor(Fish_Diet_Data$Year)
+Fish_Diet_Data$Stream <- as.factor(Fish_Diet_Data$Stream)
+Fish_Diet_Data$Date <- as.factor(Fish_Diet_Data$Date)
+Fish_Diet_Data$Taxa.Name <- as.factor(Fish_Diet_Data$Taxa.Name)
+Fish_Diet_Data$Fish.Length..Mm <- as.numeric(Fish_Diet_Data$Fish.Length..Mm)
+
+# All the diet data is numeric... count data
+Fish_Diet_Data[, c(8:27)] <- sapply(Fish_Diet_Data[, c(8:27)], as.numeric)
+
+```
+
+\newpage
+# Introduction
+
+Habitat characteristics can influence a biological community, causing bottom-up effects  influencing community structure (species abundance and richness), function (i.e. ecosystem engineers, primary producers, decomposers, etc...) and dynamics (predator-prey interactions). Specifically for freshwater habitats, fish and insect dynamics have been shown to be greatly influenced by both bottom-up effect via habitat characteristics (Holt et al., 2015, Whiles et al., 2001) and top-down effects through predator-prey interactions (Forrester et al. 1994). 
+
+For river and stream ecosystems, habitat features such as, speed of the water flow, sediment, and abiotic structures (i.e. trees and rocks), play a large role in creating unique and diverse structures for the biological community. One major threat to a healthy river system, is dam implementation. Dams deteriorate the integrity and functionality of a river ecosystem through habitat fragmentation and are physical barriers to many freshwater species. Overall, dams allow habitat and biological diversity to decline. River restoration in terms of dam removal, has proven to be a very successful management tool (Bednarek 2001). However, fish passage implementation is not seen as highly efficient (Noonan et al. 2012) and still has a large knowledge and success gap (Silva et al. 2018)
+
+On the Cedar River in Washington State, USA, fish passage alteration on Landsburg Dam was to be completed in the coming years. Fish and diet data sampling was conducted pre-fish passages, to get a baseline  understanding of the residential fish community. In this report I am taking the perspective as a scientist on this project. My main investigation for this report is: How does habitat in terms of stream and reach influence fish condition and/or diet. Overall the goal of this report is to help understand the current habitat and fish community in the Ceder River ecosystem before fish passages in Landsburg dam are completed.
+
+# Methods
+
+## The Data
+
+The dataset used is from NOAA Fisheries Open Data Portal. The dataset is called “Cedar River Fish Diets 2000-2001”, which has counts of diet items identified in stomach samples, along with geographic location (stream location, and reach ID), and fish size data. Fish were sampled either by anglers or electro fishing. Data Link: https://noaa-fisheries-nwfsc.data.socrata.com/Species/Cedar-River-Fish-Diets-20002001/8xq4-si5q 
+
+Data was organized in a data frame wide format. Where each row is a unique fish sample, with the first seven columns being a fish data and environmental factor matrix which was linked to an absence-presence diet data matrix. Fish species were identified and further grouped into either Rainbow trout (Oncorhynchus mykiss), cutthroat trout (O.clarkii clarkii), trout fry (too small to id exact species), and sculpin (Cottus rhotheus or C. gulosa). Stream location was grouped into main stem Ceder River (CR), Taylor Creek (TC), and Rock Creek (RC). See map in Appendix.
+
+A sinipit of the raw fish and environmental data and the diet matrix data can be seen below:
+
+```{r data_frame, fig.align="center", echo=FALSE}
+test <- Fish_Diet_Data %>%
+  dplyr::rename(
+    fish.grp = Taxa.Name  ) 
+
+  knitr::kable(head(test[2:8],3)) %>%
+  kable_styling(full_width = F)
+#knitr::kable(head(Fish_Diet_Data[2:8],4)) %>%
+#kable_styling(full_width = F)
+```
+
+```{r data_frame2, fig.align="center", echo=FALSE}
+knitr::kable(head(Fish_Diet_Data[20:25],3)) %>%
+kable_styling(full_width = F)
+```
+
+```{r Data_exp, fig.align="center", echo=FALSE,include = FALSE}
+
+text_tbl <- data.frame(
+Variable = c("Reach_id","Year","Stream", "Date","Fish Group","Fish.Length.Mm","Fish.Mass.G"),
+Description = c(
+"Unique geomorphic units defined by stream gradient, channel confinement, and dominant substrata (NOAA Open Data Portal)",
+"the year samples were collected",
+"The stream location where samples were taken",
+"The date when the fish was collected",
+"The fish group the sample was defined as",
+"The length of the fish sampled (Mm)",
+"The mass of the fish sampled (g)"
+)
+)
+
+kbl(text_tbl, booktabs = T) %>%
+kable_styling(full_width = F) %>%
+column_spec(1, bold = T, color = "black") %>%
+column_spec(2, width = "30em")
+
+```
+
+
+## Statistical Analysis
+
+All analysis were run using R version 4.0.2 (2020-06-22). 
+
+### Fish Condition Analysis:
+Fulton's K was calculated for each fish sampled using the equation: $K = 100*(weight/length^3)$. For each fish group, we ran a Kruskal-Wallis test to see if fish condition (Fulton's K) was influenced by either stream, and/or reach. A non-parametric analysis was decided over an ANOVA due to unequal sample sizes (n) between habitat types.
+
+### Diet Data Analysis: 
+To test for significant differences in diet data between stream, reach, and fish condition, we performed an Analysis of Similarity (ANOSIM) for each fish species using the anosim function in the "vegan" package in R. In addition we used the envfit function in R to get a p-value of correlation for fish condition (Fulton's K) and overall diet composition. We then ran a indicator species analysis to see which prey species where driving the differences between diets. Lastly, the diversity index for fish diet was calculated for each fish and grouped by fish group. The Shannon-weaver diversity index equation is: $H = -\sum_{i=1}^{s} P_i ln P_i$, where s is the number of prey species and $P_i$ is the proportion of species $i$ relative to the total number of species. Some fish species diet diversity data did not met normality and equality of variance assumptions, using Sharpiro-Wilk and Levene's tests (p-value < 0.05). Therefore for our analysis between species to be uniform, a Kruskal-Wallis test was used between diet diversity (Shannon-weaver index value) and habitat, along with a statistical pair-wise-comparison  due to a significant difference between habitats. 
+
+# Results
+
+## Fish Condition Analysis:
+
+For cutthroat trout, sculpin and trout fry, fish condition was found not to be significantly related to habitat, for both stream and reach type. Cutthroat trout: stream (Chi-square=2.75, p>0.05; Table 1) and reach (Chi-square=5.19, p>0.05; Table 1). Sculpin: stream (Chi-square=1.487, p>0.05; Table 1) and reach (Chi-square=5.77, p>0.05). Trout fry: stream (Chi-square=3.25, p>0.05; Table 1)  and reach (Chi-square=10.69, p>0.05; Table 1).
+
+For rainbow trout, fish condition was significantly related to habitat type for both stream (Chi-square=8.69, p<0.05) and reach type (Chi-square=16.036, p<0.01). Post-hoc comparisons using a pairwaise wilcox test indicates that rainbow trout condition in Rock Creek is significantly higher than the other two habitat streams, Cedar River (p<0.05, Table 2, Figure 1) and Taylor Creek (p<0.05, Table 2, Figure 1). In addition, pairwaise wilcox test indicates that rainbow trout condition in reach 4 is significantly greater than the condition in reach 2 (p<0.05, Table 3, Figure 2).
+
+```{r anova_test, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+
+anova_data <- Fish_Diet_Data %>% 
+  subset(select = c(Taxa.Name,Stream,Fultons_K,Reach_id))
+
+#### ------- CUTTHROAT ------- ###
+
+Cutthroat <- anova_data %>%
+  filter(Taxa.Name == "cutthroat.trout")
+
+kruskal.test(Fultons_K ~ Stream, data = Cutthroat)
+# Kruskal-Wallis chi-squared = 2.7503, df = 2, p-value = 0.2528
+
+kruskal.test(Fultons_K ~ Reach_id, data = Cutthroat)
+# Kruskal-Wallis chi-squared = 5.1882, df = 2, p-value = 0.2685
+
+```
+
+
+```{r anova_test2, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+
+#### ------- SCULPIN ------- ###
+
+Scuplin <- anova_data %>%
+  filter(Taxa.Name == "sculpin")
+
+
+kruskal.test(Fultons_K ~ Stream, data = Scuplin)
+#Kruskal-Wallis chi-squared = 1.4878, df = 1, p-value = 0.2226
+
+kruskal.test(Fultons_K ~ Reach_id, data = Scuplin)
+# Kruskal-Wallis chi-squared = 5.7705, df = 3, p-value = 0.217
+
+```
+
+```{r anova_test3, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+
+#### ------- Trout Fry------- ###
+Fry <- anova_data %>%
+  filter(Taxa.Name == "trout.fry")
+
+
+kruskal.test(Fultons_K ~ Stream, data = Fry)
+# Kruskal-Wallis chi-squared = 3.2504, df = 2, p-value = 0.1969
+
+kruskal.test(Fultons_K ~ Reach_id, data = Fry)
+# Kruskal-Wallis chi-squared = 10.69, df = 3, p-value = 0.05789
+
+```
+
+
+```{r anova_test4, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+#### ------- Rainbow Trout ------- ###
+
+Rainbow <- anova_data %>%
+  filter(Taxa.Name == "rainbow.trout")
+
+kruskal.test(Fultons_K ~ Stream, data = Rainbow)
+#Kruskal-Wallis chi-squared = 8.6948, df = 2, p-value = 0.01294
+kruskal.test(Fultons_K ~ Reach_id, data = Rainbow)
+#Kruskal-Wallis chi-squared = 16.036, df = 5, p-value = 0.006741
+pairwise.wilcox.test(Rainbow$Fultons_K, Rainbow$Stream,
+                     p.adjust.method = "BH")
+
+#      CR    RC   
+# RC 0.011 -    
+# TC 0.562 0.044
+
+pairwise.wilcox.test(Rainbow$Fultons_K, Rainbow$Reach_id,
+                     p.adjust.method = "BH")
+#
+#       1     2     3     4     5    
+#   2 0.085 -     -     -     -    
+#   3 0.236 0.644 -     -     -    
+#   4 0.379 0.014 0.103 -     -    
+#   5 0.757 0.140 0.392 0.392 -    
+#   6 0.223 0.583 0.649 0.085 0.392
+
+```
+
+```{r pressure1, echo=FALSE, out.width = '100%'}
+knitr::include_graphics("Table_1.jpg")
+```
+
+
+```{r pressure2, echo=FALSE, out.width = '100%'}
+knitr::include_graphics("Table_2.jpg")
+```
+
+
+```{r FultonsK_boxplot, fig.align="center", echo=FALSE, message=FALSE, warning=FALSE,fig.width=7 ,fig.height=3, fig.cap = "Rainbow trout condition (Fulton's K) for each stream habitat Colors indicate stream. Letters indicate significant differences."}
+
+Rainbow$Stream <- as.character(Rainbow$Stream)
+Rainbow$Stream[Rainbow$Stream == "TC"] <- "Taylor Creek"
+Rainbow$Stream[Rainbow$Stream == "CR"] <- "Cedar River"
+Rainbow$Stream[Rainbow$Stream == "RC"] <- "Rock Creek"
+
+
+Rainbow %>%
+  ggplot(mapping = 
+           aes(x=Stream,
+               y=Fultons_K,
+               fill=Stream))+
+  geom_boxplot(alpha=0.5)+
+  theme_classic()+ 
+  labs(x= "", y = "Rainbow Trout Fulton's K", fill = " ") +
+  annotate("text", x='Rock Creek', y=1.55, label= "a", size=3)+
+  annotate("text", x='Cedar River', y=1.4, label= "b", size=3)+
+  annotate("text", x='Taylor Creek', y=1.3, label= "b", size=3)+
+  scale_colour_discrete(name = "Stream", labels = c("Cedar River", "Rock Creek", "Taylor Creek"))
+
+
+```
+
+```{r FultonsK_boxplot2, fig.align="center", echo=FALSE, message=FALSE, warning=FALSE,fig.width=7 ,fig.height=3, fig.cap = "Rainbow trout condition (Fulton's K) for each habitat reache. Colors indicate reach ID. Letters indicate significant differences."}
+
+
+Rainbow %>%
+  ggplot(mapping = 
+           aes(x=Reach_id,
+               y=Fultons_K,
+               fill=Reach_id))+
+  geom_boxplot(alpha=0.5)+
+  theme_classic()+ 
+  labs(x= "", y = "Rainbow Trout Fulton's K", fill = " ") +
+  annotate("text", x='2', y=1.4, label= "a,c", size=3)+
+  annotate("text", x='4', y=1.55, label= "b,c", size=3)+
+  annotate("text", x='1', y=1.4, label= "c", size=3)+
+  annotate("text", x='3', y=1.4, label= "c", size=3)+
+  annotate("text", x='5', y=1.4, label= "c", size=3)+
+  annotate("text", x='6', y=1.4, label= "c", size=3)+
+  scale_colour_discrete(name = "Reach")
+
+#   1     2     3     4     5    
+#   2 0.085 -     -     -     -    
+#   3 0.236 0.644 -     -     -    
+#   4 0.379 0.014 0.103 -     -    
+#   5 0.757 0.140 0.392 0.392 -    
+#   6 0.223 0.583 0.649 0.085 0.392
+
+# Reach 3 is CR 2
+# Reach 4 is RC 1
+```
+
+
+## Diet Data Analysis:
+
+For rainbow trout habitat type reach (ANOSIM, R-value = 0.1056, p < 0.01), has a significant influence on diet composition. However, stream (ANOSIM, R-value = 0.04593, p > 0.05) and Fulton's K (correlation, p>0.05) did not show any indication of diet composition. For the other three fish groups (cutthroat, sculpin, and trout fry), habitat type (stream and reach) and Fulton's K did not indicate diet composition (Table 5). 
+
+Indicator species analysis showed that for rainbow trout diet, certain prey species were good indicators for habitat reach type. Diptera larvae stage (p<0.05) were indicators of reach 2 and 6. While, Ephemeroptera in both nymph (p<0.05) and adult (p<0.001) stages were good indicator species for reach 6. Lastly, worms were good indicators for just reach 2 (p<0.05). See table 6 for further details. 
+
+For cutthroat trout, sculpin and trout fry, diet diversity was found not to be significantly related to habitat, for both stream and reach type, and fish condition. Cutthroat trout: stream (Chi-square=1.1958, p>0.05), reach (Chi-square=1.2361, p>0.05), and Fulton's K (Chi-square=11, p>0.05). Sculpin: stream (Chi-square=1.78, p>0.05), reach (Chi-square=10.605, p>0.05), and Fulton's K (Chi-square=27.971, p>0.05). Trout fry: stream (Chi-square=5.478, p>0.05)  and reach (Chi-square=8.2985, p>0.05), and Fulton's K (Chi-square=34, p>0.05).For rainbow trout, diet diversity was found to be significantly different between streams (Chi-square =6.922, p<0.05), but not for reach and Fulton's K (Chi-square=61, p>0.05).
+
+```{r diet_diversity, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+
+# Only keep the data columns we need for the NMDS/ANOSIM analysis
+Ord_Diet_Data <- Fish_Diet_Data %>% 
+                          subset(select = -c(Date,Fish.Length..Mm,Fish.Mass.G,Fish.Length.cm,Year)) %>% 
+  rowwise() %>% 
+  dplyr::mutate(sumVar = sum(c_across(Diptera.Larvae:Worms))) %>%
+  filter(sumVar>0) %>% 
+  subset(select = -c(sumVar)) #remove the samples that had no diet data
+### REMOVE OUTLEIR ####
+
+# Ok so point 42 is an outlier we should remove 
+Ord_Diet_Data2 <- Ord_Diet_Data[-c(42), ]
+
+str(Ord_Diet_Data2)
+
+Ord_Diet_Data2$Worms <- as.numeric(Ord_Diet_Data2$Worms)
+Ord_Diet_Data2$Trichoptera.Adult <- as.numeric(Ord_Diet_Data2$Trichoptera.Adult)
+
+Ord_Diet_Data_cutt <- 
+  Ord_Diet_Data2 %>%
+  filter(Taxa.Name=="cutthroat.trout")
+
+Ord_Diet_Data_rain <- 
+  Ord_Diet_Data2 %>%
+  filter(Taxa.Name=="rainbow.trout")
+
+Ord_Diet_Data_fry <- 
+  Ord_Diet_Data2 %>%
+  filter(Taxa.Name=="trout.fry")
+
+Ord_Diet_Data_sculpin <- 
+  Ord_Diet_Data2 %>%
+  filter(Taxa.Name=="sculpin")
+
+
+S_W_I_stream_cutt <-ddply(Ord_Diet_Data_cutt,~Stream,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_stream_rain <-ddply(Ord_Diet_Data_rain,~Stream,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_stream_fry <-ddply(Ord_Diet_Data_fry,~Stream,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+
+S_W_I_stream_scupl <-ddply(Ord_Diet_Data_sculpin,~Stream,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+
+kruskal.test(SHANNON ~ Stream, data = S_W_I_stream_cutt)
+# Kruskal-Wallis chi-squared = 1.1958, df = 2, p-value = 0.55
+
+kruskal.test(SHANNON ~ Stream, data = S_W_I_stream_fry)
+# Kruskal-Wallis chi-squared = 5.4786, df = 2, p-value = 0.06462
+
+kruskal.test(SHANNON ~ Stream, data = S_W_I_stream_scupl)
+# Kruskal-Wallis chi-squared = 1.7838, df = 2, p-value = 0.4099
+
+kruskal.test(SHANNON ~ Stream, data = S_W_I_stream_rain)
+# Kruskal-Wallis chi-squared = 6.2152, df = 2, p-value = 0.04471
+
+pairwise.wilcox.test(S_W_I_stream_rain$SHANNON, S_W_I_stream_rain$Stream,
+                     p.adjust.method = "BH")
+#     CR    RC   
+# RC 0.136 -    
+# TC 0.071 1.000
+
+# -- now lets look at the diversity between reaches
+
+S_W_I_Reach_cutt<-ddply(Ord_Diet_Data_cutt,~Reach_id,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_Reach_rain <-ddply(Ord_Diet_Data_rain,~Reach_id,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_Reach_fry <-ddply(Ord_Diet_Data_fry,~Reach_id,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_Reach_scupl <-ddply(Ord_Diet_Data_sculpin,~Reach_id,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+kruskal.test(SHANNON ~ Reach_id, data = S_W_I_Reach_cutt)
+# Kruskal-Wallis chi-squared = 1.2361, df = 3, p-value = 0.7444
+
+kruskal.test(SHANNON ~ Reach_id, data = S_W_I_Reach_scupl)
+# Kruskal-Wallis chi-squared = 10.605, df = 5, p-value = 0.05979
+
+kruskal.test(SHANNON ~ Reach_id, data = S_W_I_Reach_rain)
+# Kruskal-Wallis chi-squared = 6.922, df = 5, p-value = 0.2265
+
+kruskal.test(SHANNON ~ Reach_id, data = S_W_I_Reach_fry)
+# Kruskal-Wallis chi-squared = 8.2985, df = 5, p-value = 0.1405
+
+
+S_W_I_K_cutt<-ddply(Ord_Diet_Data_cutt,~Fultons_K,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_K_rain <-ddply(Ord_Diet_Data_rain,~Fultons_K,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_K__fry <-ddply(Ord_Diet_Data_fry,~Fultons_K,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+S_W_I_K__scupl <-ddply(Ord_Diet_Data_sculpin,~Fultons_K,function(x) {
+  data.frame(SHANNON=diversity(x[5:23], index="shannon"))
+})
+
+kruskal.test(SHANNON ~ Fultons_K, data = S_W_I_K_cutt)
+# Kruskal-Wallis chi-squared = 11, df = 11, p-value = 0.4433
+
+kruskal.test(SHANNON ~ Fultons_K, data = S_W_I_K_rain)
+# Kruskal-Wallis chi-squared = 61, df = 61, p-value = 0.4759
+
+kruskal.test(SHANNON ~ Fultons_K, data = S_W_I_K__fry)
+# Kruskal-Wallis chi-squared = 34, df = 34, p-value = 0.4677
+
+kruskal.test(SHANNON ~ Fultons_K, data = S_W_I_K__scupl)
+# Kruskal-Wallis chi-squared = 27.971, df = 30, p-value = 0.572
+
+```
+
+```{r pressure, echo=FALSE, out.width = '100%'}
+knitr::include_graphics("Table_4.jpg")
+```
+
+```{r diversity_boxplot, fig.align="center", echo=FALSE, message=FALSE, warning=FALSE,fig.width=7 ,fig.height=3, fig.cap = "Boxplot of rainbow trout diet diversity (Shannon-Weaver index) by stream."}
+
+S_W_I_stream_rain$Stream <- as.character(S_W_I_stream_rain$Stream)
+
+S_W_I_stream_rain$Stream[S_W_I_stream_rain$Stream == "TC"] <- "Taylor Creek"
+S_W_I_stream_rain$Stream[S_W_I_stream_rain$Stream == "CR"] <- "Cedar River"
+S_W_I_stream_rain$Stream[S_W_I_stream_rain$Stream == "RC"] <- "Rock Creek"
+
+S_W_I_stream_rain %>%
+  ggplot(mapping = 
+           aes(x=Stream,
+               y=SHANNON,
+               fill=Stream))+
+  geom_boxplot(alpha=0.5)+
+  theme_classic()+ 
+  labs(x= "", y = "Shannon Diversity Index", fill = " ") +
+  coord_flip()
+
+
+```
+
+```{r ANOSIM, diet_diversity, fig.align="center", fig.align="center", include = FALSE, echo=FALSE, message=FALSE, warning=FALSE }
+
+#make community matrix - extract columns with abundance information
+
+# Ok so point 42 is an outlier we should remove 
+Ord_Diet_Data_cutt <- Ord_Diet_Data_cutt[-c(1), ]
+
+com2_cutt = Ord_Diet_Data_cutt[,5:ncol(Ord_Diet_Data_cutt)]
+str(com2_cutt)
+summary(com2_cutt)
+
+env = Ord_Diet_Data_cutt[,1]
+
+#turn abundance data frame into a matrix
+m_com2_cutt = as.matrix(com2_cutt)
+
+set.seed(234)
+nmds2 = metaMDS(m_com2_cutt, distance = "bray", permutations = 1000)
+nmds2
+#Dimensions: 2 
+#Stress:     0.1071062 
+
+
+en = envfit(nmds2, env, permutations = 1000, na.rm = TRUE)
+en
+#                     NMDS1    NMDS2     r2 Pr(>r)
+# Fultons_K 0.19677 0.98045 0.0063  0.978
+
+
+#Permutation: free
+#Number of permutations: 1000
+
+
+ano1 = anosim(m_com2_cutt, Ord_Diet_Data_cutt$Stream, distance = "bray", permutations = 1000)
+# ANOSIM statistic R: 0.194 
+ #     Significance: 0.14785 
+
+ano3 = anosim(m_com2_cutt, Ord_Diet_Data_cutt$Reach_id, distance = "bray", permutations = 1000)
+# ANOSIM statistic R: 0.1742 
+#      Significance: 0.28372 
+
+
+# RAINBOW
+
+Ord_Diet_Data_rain 
+
+com2_rain = Ord_Diet_Data_rain[,5:ncol(Ord_Diet_Data_rain)]
+str(com2_rain)
+summary(com2_rain)
+
+env = Ord_Diet_Data_rain[,1]
+
+#turn abundance data frame into a matrix
+m_com2_rain = as.matrix(com2_rain)
+
+set.seed(234)
+nmds3 = metaMDS(m_com2_rain, distance = "bray", permutations = 1000)
+nmds3
+#Dimensions: 2 
+#Stress:     0.2122445 
+
+en = envfit(nmds3, env, permutations = 1000, na.rm = TRUE)
+en
+#                     NMDS1    NMDS2     r2 Pr(>r)
+#Fultons_K  0.91588 -0.40144 0.0042 0.8861
+
+#Permutation: free
+#Number of permutations: 1000
+
+
+ano4 = anosim(m_com2_rain, Ord_Diet_Data_rain$Stream, distance = "bray", permutations = 1000)
+# ANOSIM statistic R: 0.04593 
+  #    Significance: 0.16084 
+
+ano5 = anosim(m_com2_rain, Ord_Diet_Data_rain$Reach_id, distance = "bray", permutations = 1000)
+# ANOSIM statistic R:  0.1056 
+#      Significance: 0.006993 
+
+# FRY
+Ord_Diet_Data_fry 
+
+
+com2_fry = Ord_Diet_Data_fry[,5:ncol(Ord_Diet_Data_fry)]
+str(com2_fry)
+summary(com2_fry)
+
+env = Ord_Diet_Data_fry[,1]
+
+#turn abundance data frame into a matrix
+m_com2_fry = as.matrix(com2_fry)
+
+set.seed(234)
+nmds4 = metaMDS(m_com2_fry, distance = "bray", permutations = 1000)
+nmds4
+#Dimensions: 2 
+#Stress:     0.117198 
+
+en = envfit(nmds4, env, permutations = 1000, na.rm = TRUE)
+en
+#                     NMDS1    NMDS2     r2 Pr(>r)
+# Fultons_K -0.069787 -0.997560 0.0645 0.3586
+
+#Permutation: free
+#Number of permutations: 1000
+
+
+ano6 = anosim(m_com2_fry, Ord_Diet_Data_fry$Stream, distance = "bray", permutations = 1000)
+# ANOSIM statistic R: -0.1426 
+ #     Significance: 0.95405 
+
+ano7 = anosim(m_com2_fry, Ord_Diet_Data_fry$Reach_id, distance = "bray", permutations = 1000)
+# ANOSIM statistic R: 0.03658 
+#      Significance: 0.25275 
+
+# SCULPIN
+
+Ord_Diet_Data_sculpin 
+
+com2_sculp = Ord_Diet_Data_sculpin[,5:ncol(Ord_Diet_Data_sculpin)]
+str(com2_sculp)
+summary(com2_sculp)
+
+env = Ord_Diet_Data_sculpin[,1]
+
+#turn abundance data frame into a matrix
+m_com2_sculp = as.matrix(com2_sculp)
+
+set.seed(234)
+nmds5 = metaMDS(m_com2_sculp, distance = "bray", permutations = 1000)
+nmds5
+#Dimensions: 2 
+#Stress:     0.0555508 
+
+en = envfit(nmds5, env, permutations = 1000, na.rm = TRUE)
+en
+#                     NMDS1    NMDS2     r2 Pr(>r)
+# Fultons_K -0.47445 -0.88028 0.0032  0.961
+
+
+#Permutation: free
+#Number of permutations: 1000
+
+
+ano8 = anosim(m_com2_sculp, Ord_Diet_Data_sculpin$Stream, distance = "bray", permutations = 1000)
+#ANOSIM statistic R: 0.07676 
+ #     Significance: 0.097902 
+
+ano9 = anosim(m_com2_sculp, Ord_Diet_Data_sculpin$Reach_id, distance = "bray", permutations = 1000)
+#ANOSIM statistic R: -0.01676 
+ #     Significance: 0.58941 
+```
+
+
+```{r pressure5, echo=FALSE, out.width = '100%'}
+knitr::include_graphics("Table_5.jpg")
+```
+
+```{r, nmdsplot, fig.align="center", fig.width=10, fig.height=8, echo=FALSE, message=FALSE, warning=FALSE,fig.width=14, fig.height=14, fig.cap = "NMDS plot. Reach has a significant influence on diet composition (ANOSIM, R-value = 0.1056, p < 0.01). Colors and convext hulls inidcate reach ID."}
+
+
+#extract NMDS scores (x and y coordinates)
+data.scores_rain = as.data.frame(scores(nmds3))
+
+#add columns to data frame 
+data.scores_rain$Reach_id = Ord_Diet_Data_rain$Reach_id
+data.scores_rain$Stream = Ord_Diet_Data_rain$Stream
+
+#head(data.scores)
+
+  grp.1 <- data.scores_rain[data.scores_rain$Reach_id == "1", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "1", c("NMDS1", "NMDS2")]), ]  # hull values for grp A
+  grp.2 <- data.scores_rain[data.scores_rain$Reach_id == "2", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "2", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+  grp.3 <- data.scores_rain[data.scores_rain$Reach_id == "3", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "3", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+  grp.4 <- data.scores_rain[data.scores_rain$Reach_id == "4", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "4", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+    grp.5 <- data.scores_rain[data.scores_rain$Reach_id == "5", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "5", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+  grp.6 <- data.scores_rain[data.scores_rain$Reach_id == "6", ][chull(data.scores_rain[data.scores_rain$Reach_id == 
+    "6", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+
+
+hull.data2 <- rbind(grp.1, grp.2,grp.3,grp.4,grp.5,grp.6)  #combine grp.a and grp.b
+#hull.data2
+
+species.scores.rain <- as.data.frame(scores(nmds3, "species"))  #Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores.rain$species <- rownames(species.scores.rain)  # create a column of species, from the rownames of species.scores
+#head(species.scores.cutt) 
+
+ p1 <- ggplot() + 
+  geom_polygon(data=hull.data2,aes(x=NMDS1,y=NMDS2,fill=Reach_id,group=Reach_id),alpha=0.30) + # add the convex hulls
+  geom_point(data=data.scores_rain,aes(x=NMDS1,y=NMDS2,shape=Reach_id,colour=Reach_id),size=3)+
+  geom_text(data=species.scores.rain,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.75) +  # add the species labels
+  theme_bw() + 
+  #scale_fill_discrete(name = "Stream", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  #scale_shape_discrete(name = "Stream", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  #scale_colour_discrete(name = "Fish Group", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  annotate("text", x=-.5, y=-1.5, label= "stress = 0.21 ", size=5) 
+
+
+  grp.cr <- data.scores_rain[data.scores_rain$Stream == "CR", ][chull(data.scores_rain[data.scores_rain$Stream == 
+    "CR", c("NMDS1", "NMDS2")]), ]  # hull values for grp A
+  grp.tc <- data.scores_rain[data.scores_rain$Stream == "TC", ][chull(data.scores_rain[data.scores_rain$Stream == 
+    "TC", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+  grp.rc <- data.scores_rain[data.scores_rain$Stream == "RC", ][chull(data.scores_rain[data.scores_rain$Stream == 
+    "RC", c("NMDS1", "NMDS2")]), ]  # hull values for grp B
+
+
+hull.data3 <- rbind(grp.cr, grp.tc,grp.rc)  #combine grp.a and grp.b
+#hull.data2
+
+p2 <- ggplot() + 
+  geom_polygon(data=hull.data3,aes(x=NMDS1,y=NMDS2,fill=Stream,group=Stream),alpha=0.30) + # add the convex hulls
+  geom_point(data=data.scores_rain,aes(x=NMDS1,y=NMDS2,shape=Stream,colour=Stream),size=3)+
+  geom_text(data=species.scores.rain,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.75) +  # add the species labels
+  theme_bw() + 
+  #scale_fill_discrete(name = "Stream", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  #scale_shape_discrete(name = "Stream", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  #scale_colour_discrete(name = "Fish Group", labels = c("Cutthroat trouth", "rainbow trout", "sculpin","trout fry"))+
+  annotate("text", x=-.5, y=-1.5, label= "stress = 0.228 ", size=5) 
+
+p1
+
+```
+
+```{r indicator_species, include=FALSE, echo=FALSE}
+
+abund = Ord_Diet_Data_rain[,5:ncol(Ord_Diet_Data_rain)]
+Reach_id = Ord_Diet_Data_rain$Reach_id
+
+inv = multipatt(abund, Reach_id, func = "r.g", control = how(nperm=9999))
+
+summary(inv)
+
+#
+# Group 2  #sps.  1 
+#       stat p.value  
+#Worms 0.448  0.0209 *
+
+# Group 6  #sps.  2 
+#                     stat p.value   
+#Ephemeroptera.Adult 0.488  0.0085 **
+#Ephemeroptera.Nymph 0.470  0.0109 * 
+
+# Group 2+6  #sps.  1 
+#                stat p.value  
+#Diptera.Larvae 0.469  0.0112 *
+
+```
+
+
+```{r boxplot, fig.align="center", echo=FALSE, message=FALSE, warning=FALSE,fig.width=7, fig.height=3, fig.cap = "Relative abundances of the four diet indicator species for Rainbow trout and reach. Colors indicate fish group."}
+library(ggplot2)
+library(reshape2)
+
+sub_pc = data.frame(Reach_id = Ord_Diet_Data_rain$Reach_id, 
+                    Worms = Ord_Diet_Data_rain$Worms, 
+                    Diptera.Larvae = Ord_Diet_Data_rain$Diptera.Larvae, 
+                    Ephemeroptera.Adult  = Ord_Diet_Data_rain$Ephemeroptera.Adult, 
+                    Ephemeroptera.Nymph  = Ord_Diet_Data_rain$Ephemeroptera.Nymph) 
+
+sub_pc_m = melt(sub_pc, id = "Reach_id")
+
+gg1 = ggplot(sub_pc_m, aes(x = variable, y = value,color = Reach_id)) + 
+     geom_boxplot(position = position_dodge(0.5)) +
+     geom_vline(xintercept = c(1.5,2.5,3.5,4.5,5.5,6.5,7.5), colour = "grey85", size = 1.2) +
+     theme(legend.title = element_text(size = 10), 
+     legend.text = element_text(size = 10), legend.position = "right", 
+     axis.text.x = element_text(colour = "black", size = 10), 
+     axis.text.y = element_text(size = 10, colour = "black"), 
+     axis.title.y = element_text(size = 10, colour = "black"), 
+     panel.background = element_blank(), 
+     panel.border = element_rect(fill = NA, colour = "black"), 
+     legend.key=element_blank()) + 
+     labs(x= "", y = "Relative Abundance (%)", fill = "Reach_id")+
+  scale_colour_discrete(name = "Reach")
+
+sub_pc_st = data.frame(Stream = Ord_Diet_Data_rain$Stream, 
+                    Worms = Ord_Diet_Data_rain$Worms, 
+                    Ephemeroptera.Nymph = Ord_Diet_Data_rain$Ephemeroptera.Nymph, 
+                    Ephemeroptera.Adult  = Ord_Diet_Data_rain$Ephemeroptera.Adult)  
+
+sub_pc_m_st = melt(sub_pc_st, id = "Stream")
+
+gg2 = ggplot(sub_pc_m_st, aes(x = variable, y = value,color = Stream)) + 
+     geom_boxplot(position = position_dodge(0.5)) +
+     geom_vline(xintercept = c(1.5,2.5,3.5,4.5,5.5,6.5,7.5), colour = "grey85", size = 1.2) +
+     theme(legend.title = element_text(size = 10), 
+     legend.text = element_text(size = 10), legend.position = "right", 
+     axis.text.x = element_text(colour = "black", size = 10), 
+     axis.text.y = element_text(size = 10, colour = "black"), 
+     axis.title.y = element_text(size = 10, colour = "black"), 
+     panel.background = element_blank(), 
+     panel.border = element_rect(fill = NA, colour = "black"), 
+     legend.key=element_blank()) + 
+     labs(x= "", y = "Relative Abundance (%)", fill = "Reach_id")+
+  scale_colour_discrete(name = "Stream")
+
+
+gg1
+```
+
+```{r pressure7, echo=FALSE, out.width = '100%'}
+knitr::include_graphics("Table_6.jpg")
+```
+
+\newpage
+# Discussion: 
+
+We found that the fish condition differed between habitat types in terms of both streams and reaches only for rainbow trout. While cutthroat trout, sculpin and trout fry had no habitat effect on condition. Similar to the condition analyses, rainbow trout was the only fish group which showed significant effects from habitat type on diet. We found that stream type has a significant effect on the diversity of prey species within the rainbow trout diet. In addition, reach type had a significant effect on the diet composition within rainbow trout, with reaches 2 and 6 having  specific indicator species. Our results reveal that unlike the other fish groups within this freshwater community, rainbow trout’s diet and condition is significantly influenced by the habitat at which they inhabit within this freshwater ecosystem. 
+
+Our results highlight that habitat characteristics have the ability to influence fish condition. This is most likely due to differences in features such as, water movement (i.e. slower or faster), quality (i.e. pollutants, nutrients), and habitat supporting structures (i.e. trees or rocks). These differences in habitat characteristics will then elicit differing bottom up effects, altering plant, insect, and thus fish communities. For instance, some habitats may have more structural diversity and higher stream flow allowing for a larger diversity of prey species and better adult and/or reproductive habitat. 
+
+We found that Rock Creek had a significantly higher rainbow trout condition than the two other habitats, Taylor creek and Cedar River. Rock Creek having a higher condition is probably due to it having the greatest habitat accessibility for fish, due to its wider wetted width (4-6m, Kiffney et al. 2009) and around 10 km of easily accessible habitat, unlike Taylor Creek which has less than 0.5 km deemed easily accessible (Kiffney et al. 2009). Therefore, Rock Creek may be better suited for rainbow trout thus allowing the condition of the fish to be greater. We also found that reach 4 has a higher rainbow trout condition than reach 2. The same conclusions for stream condition differences can be made for reach condition differences. Such that, the characteristics of reach 4, smaller wetted width, shallower depth, larger channel slope, and higher wood abundance, could be more beneficial for rainbow trout than reach 2. However, an additional conclusion can be made. That reach hydrologic conditions greatly influence prey species, influencing composition and abundance, thus causing a bottom up effect on fish condition. 
+
+Previous studies have clearly shown that hydrologic conditions greatly influence insect communities. For instance it was found that peak richness of insect communities in a wetland environments were found at intermediate levels of the hydro-period and at the intermediate number of dry events (Whiles et al. 2001). Another study found that insect community richness increased with larger catchment areas and a greater connectivity and centrality increased local (alpha) diversity (Altermatt et al 2013). Bottom up effects from insect communities have also been found. In a study by Hernandex et al. 2019, it was shown that environmental differences between habitats altered site-specific prey communities, in turn influencing dietary patterns for brown trout. Therefore, since we found reach-specific dietary differences for rainbow trout, insect/prey communities are most likely different between reaches. However, for this interpretation of the results, sampling of the insect community along with the fish sampling would be needed to make a stronger insect community conclusion. 
+
+Additionally, for diet data, we found that diet composition for rainbow trout was significantly related to reaches. ANOSIM analysis does not show how groups differ just that they do. However, using a species indicator analysis, we identified four species which are found significantly more often than others in reach 2, 6 and both 2&6. For example, Ephemeroptera nymph and adult stages were good diet indicators for reach 6, thus these insects may be more abundant in these habitats.   
+
+Overall, in our analysis we found that rainbow trout was the only fish group significantly affected in condition and diet by stream and reach types. This could be due to the life history strategies and habitat preferences. For instance sculpin are considered to be a bottom-dwelling fish and a less “active” predator. Therefore, bottom habitat and bottom prey abundances between habitats may not have been that different. Unlike sculpin, rainbow and cutthroat trout are considered “active” predators, catching many insects at the surface of the water. Therefore, there is not a huge difference between rainbow and cutthroat trout behavior. So why rainbow trout are more influenced by habitat may be due to their differences in habitat preference. Rainbow trout have been found to prefer different reach types than cutthroat (Bozek et al. 1992). Cutthroat are considered a more headwater stream species and have shown to have a higher competitive advantage (Bozek et al. 1992). Therefore, it is possible that rainbow trout may need to exhibit more flexibility in diet choice and this may occur between habitats when competing with cutthroat. 
+
+In the terms of our study, once the fish passages are implemented in Landsburg Dam, it is hypothesized that trout below the dam may be very successful in re-establishment in waters above the dam. We can also hypothesize that other species which are not found above the dam currently, such as salmon, will also be successful in reestablishment. In a study by Thomas et al. 2014, a large scale dataset of reach-scale restoration projects showed that for most freshwater habitats post-restoration, fish abundances and richness increased. However they also found that recovery to the historical reference did not always happen. Therefore, post fish passage, fish abundance and richness may increase, however maybe not to the historical level. 
+
+As fish abundance and richness may increase, this creates a possibility of more niche overlap, allowing for higher competition. This has been found in other river systems, such as in Norway, where both sculpin and trout species have considerable habitat and diet overlap (Hesthagen et al. 2004). As intra- and inter-species competition increases, for either food or habitat, some species may be more at risk of being "pushed out" post restoration. For instance, theory suggests that generalist species would be replaced by specialists when restoration occurs (Thomas et al. 2014). Furthermore, species which compete can constrain each other's niche potential (Bolnick et al 2010). Therefore, if one species density were to be considerably higher than the other, this could have an inverse density and condition relationship between niche overlapped species. So even though we hypothesize that abundance and richness will increase post fish passage, some species above the dam may be "pushed out" or decrease in density/abundances due to the increase in competition.
+
+# Conclusion: 
+
+By assessing the residential fish community before passages are implemented in Landsburg Dam, we found differences in fish condition and diet between habitat types (streams and reaches), but only for rainbow trout. For rainbow trout we see that habitats above the dam differ in fish condition, such that Rock Creek has higher rainbow trout condition. Our results  infer bottom-up effects, such as habitat features influence prey communities and fish condition. However it should be noted that habitat does not cause bottom up effects or changes for all fish groups. The extent of the habitat effect on different fish groups may be due to differences in fish behavior, life history strategies, and habitat preference. Moving forward post fish passage implementation, there should be higher densities of trout, and salmon (which are not found above the dam currently), increasing fish abundance and richness. It is hypothesized that as a result, (1) Inter and intra-species competition will increase, influencing fish condition. (2) Higher fish densities will have a top-down effect on prey communities (richness and abundance). (3) As a result of (1) competition and (2) top-down effects, diet composition and diversity will change. Overall, fish passages have the potential to increase the abundance of fish and introduce an additional fish group (salmon) into this freshwater community above Landsburg Dam. These preliminary results can give insight to the importance of habitat quality and biodiversity within community structure, and moving forward post-fish passage implementation sampling is necessary for a side-by-side comparison to further understand restoration efforts.
+
+
+# Appendix:
+
+```{r map, echo=FALSE, fig.cap="A map of Cedar River main stem and tributaries, along with reach breaks, above Landsburg Diversion Dam. Not all reaches were sampled in this dataset, therefore, in the map there are more reaches shown. Map is taken from Kiffney et al. 2009",fig.align="center", out.width = '75%'}
+
+knitr::include_graphics("river_map.jpg")
+```
+
+# Acknowledgement:
+
+I have lots of experience with coding and statistics in R. However, additional coding ideas and help was found through R-tutorials on ecology and R blogs. For example:
+
+* https://jkzorz.github.io/ 
+* https://chrischizinski.github.io/rstats/vegan-ggplot2/
+* https://www.flutterbys.com.au/stats/tut/tut13.2.html
+
+To find the Rmarkdown file which contains the code/analysis in this report please follow this link:
+
+* https://github.com/Anna-Jorgensen/Report1_code_FisheriesEcologyandAssessment 
+
+# Work Cited: 
+
+Bednarek, A. T. (2001). Undamming rivers: a review of the ecological impacts of dam removal. Environmental management, 27(6), 803-814.
+
+Bolnick, D. I., Ingram, T., Stutz, W. E., Snowberg, L. K., Lau, O. L., & Paull, J. S. (2010). Ecological release from interspecific competition leads to decoupled changes in population and individual niche width. Proceedings of the Royal Society B: Biological Sciences, 277(1689), 1789-1797.
+
+Bozek, M. A., & Hubert, W. A. (1992). Segregation of resident trout in streams as predicted by three habitat dimensions. Canadian Journal of Zoology, 70(5), 886-890.
+
+Forrester, G. E. (1994). Influences of predatory fish on the drift dispersal and local density of stream insects. Ecology, 75(5), 1208-1218.
+
+Hesthagen, T., Saksgård, R., Hegge, O., Dervo, B. K., & Skurdal, J. (2004). Niche overlap between young brown trout (Salmo trutta) and Siberian sculpin (Cottus poecilopus) in a subalpine Norwegian river. In The Atna River: Studies in an Alpine—Boreal Watershed (pp. 117-125). Springer, Dordrecht.
+
+Holt, C. R., Pfitzer, D., Scalley, C., Caldwell, B. A., & Batzer, D. P. (2015). Macroinvertebrate community responses to annual flow variation from river regulation: An 11‐year study. River Research and Applications, 31(7), 798-807.
+
+Kiffney, P. M., Pess, G. R., Anderson, J. H., Faulds, P., Burton, K., & Riley, S. C. (2009). Changes in fish communities following recolonization of the Cedar River, WA, USA by Pacific salmon after 103 years of local extirpation. River Research and Applications, 25(4), 438-452.
+
+Noonan, Michael J., James WA Grant, and Christopher D. Jackson. "A quantitative assessment of fish passage efficiency." Fish and Fisheries 13.4 (2012): 450-464.
+
+Sánchez-Hernández, J., Finstad, A. G., Arnekleiv, J. V., Kjærstad, G., & Amundsen, P. A. (2019). Drivers of diet patterns in a globally distributed freshwater fish species. Canadian Journal of Fisheries and Aquatic Sciences, 76(8), 1263-1274.
+
+Silva, A. T., Lucas, M. C., Castro‐Santos, T., Katopodis, C., Baumgartner, L. J., Thiem, J. D., & Cooke, S. J. (2018). The future of fish passage science, engineering, and practice. Fish and Fisheries, 19(2), 340-362.
+
+Thomas, G., Lorenz, A. W., Sundermann, A., Haase, P., Peter, A., & Stoll, S. (2015). Fish community responses and the temporal dynamics of recovery following river habitat restorations in Europe. Freshwater Science, 34(3), 975-990.
+
+Whiles, M. R., & Goldowitz, B. S. (2001). Hydrologic influences on insect emergence production from central Platte River wetlands. Ecological Applications, 11(6), 1829-1842.
+
+
